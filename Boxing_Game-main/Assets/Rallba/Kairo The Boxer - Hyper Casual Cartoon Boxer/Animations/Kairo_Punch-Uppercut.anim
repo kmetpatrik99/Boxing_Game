@@ -9347,36 +9347,36 @@ AnimationClip:
       m_Curve:
       - serializedVersion: 3
         time: 0
-        value: {x: 1.0000001, y: 0.99999976, z: 0.99999994}
-        inSlope: {x: 0.03644228, y: 0.03643334, z: 0.03644377}
-        outSlope: {x: 0.03644228, y: 0.03643334, z: 0.03644377}
+        value: {x: 1, y: 1, z: 1}
+        inSlope: {x: 0.006074928, y: 0.006073438, z: 0.006075176}
+        outSlope: {x: 0.006074928, y: 0.006073438, z: 0.006075176}
         tangentMode: 0
         weightedMode: 0
         inWeight: {x: 0.33333334, y: 0.33333334, z: 0.33333334}
         outWeight: {x: 0.33333334, y: 0.33333334, z: 0.33333334}
       - serializedVersion: 3
         time: 0.24
-        value: {x: 1.3148686, y: 1.3148687, z: 1.314869}
-        inSlope: {x: 3.9723077, y: 3.9723032, z: 3.972312}
-        outSlope: {x: 3.9723077, y: 3.9723032, z: 3.972312}
+        value: {x: 1.052489, y: 1.052489, z: 1.052489}
+        inSlope: {x: 0.6621837, y: 0.6621829, z: 0.6621844}
+        outSlope: {x: 0.6621837, y: 0.6621829, z: 0.6621844}
         tangentMode: 0
         weightedMode: 0
         inWeight: {x: 0.33333334, y: 0.33333334, z: 0.33333334}
         outWeight: {x: 0.33333334, y: 0.33333334, z: 0.33333334}
       - serializedVersion: 3
         time: 0.28
-        value: {x: 1.5, y: 1.4999996, z: 1.5000001}
-        inSlope: {x: 14.814138, y: 14.814132, z: 14.8141365}
-        outSlope: {x: 14.814138, y: 14.814132, z: 14.8141365}
+        value: {x: 1.08335, y: 1.08335, z: 1.08335}
+        inSlope: {x: 2.469517, y: 2.469516, z: 2.469517}
+        outSlope: {x: 2.469517, y: 2.469516, z: 2.469517}
         tangentMode: 0
         weightedMode: 0
         inWeight: {x: 0.33333334, y: 0.33333334, z: 0.33333334}
         outWeight: {x: 0.33333334, y: 0.33333334, z: 0.33333334}
       - serializedVersion: 3
         time: 0.32
-        value: {x: 2.4999995, y: 2.499999, z: 2.4999998}
-        inSlope: {x: 24.999992, y: 24.99999, z: 24.999996}
-        outSlope: {x: 24.999992, y: 24.99999, z: 24.999996}
+        value: {x: 1.25005, y: 1.25005, z: 1.25005}
+        inSlope: {x: 4.167499, y: 4.167498, z: 4.167499}
+        outSlope: {x: 4.167499, y: 4.167498, z: 4.167499}
         tangentMode: 0
         weightedMode: 0
         inWeight: {x: 0.33333334, y: 0.33333334, z: 0.33333334}
