@@ -67,9 +67,13 @@ namespace BoxingGame
         [Header("Punches (Jab, Cross, Uppercut)")]
         public PunchData[] punches;
 
+        [Header("Difficulty (set by GameManager)")]
+        public float damageMultiplier = 1f;        // scales all damage this fighter deals
+
         [Header("Ring (set by GameManager)")]
         public Vector3 ringCenter = Vector3.zero;
         public Vector2 ringHalfSize = new Vector2(2.4f, 2.4f);
+        public float ringRadius = 0f;              // > 0 = circular/octagonal ring instead of a rectangle
 
         public Fighter opponent;
 
@@ -212,8 +216,21 @@ namespace BoxingGame
         void ClampToRing()
         {
             Vector3 p = transform.position;
-            p.x = Mathf.Clamp(p.x, ringCenter.x - ringHalfSize.x, ringCenter.x + ringHalfSize.x);
-            p.z = Mathf.Clamp(p.z, ringCenter.z - ringHalfSize.y, ringCenter.z + ringHalfSize.y);
+            if (ringRadius > 0.01f)
+            {
+                Vector3 off = new Vector3(p.x - ringCenter.x, 0f, p.z - ringCenter.z);
+                if (off.magnitude > ringRadius)
+                {
+                    off = off.normalized * ringRadius;
+                    p.x = ringCenter.x + off.x;
+                    p.z = ringCenter.z + off.z;
+                }
+            }
+            else
+            {
+                p.x = Mathf.Clamp(p.x, ringCenter.x - ringHalfSize.x, ringCenter.x + ringHalfSize.x);
+                p.z = Mathf.Clamp(p.z, ringCenter.z - ringHalfSize.y, ringCenter.z + ringHalfSize.y);
+            }
             p.y = ringCenter.y;
             transform.position = p;
         }
@@ -344,12 +361,13 @@ namespace BoxingGame
             if (actionRoutine != null) { StopCoroutine(actionRoutine); actionRoutine = null; }
 
             Vector3 away = toAtt.sqrMagnitude > 0.0001f ? -toAtt.normalized : -transform.forward;
+            float baseDamage = p.damage * attacker.damageMultiplier;
             float dmg;
 
             if (blocked)
             {
-                dmg = p.damage * blockDamageMultiplier;
-                Stamina -= p.damage * blockStaminaCostPerDamage;
+                dmg = baseDamage * blockDamageMultiplier;
+                Stamina -= baseDamage * blockStaminaCostPerDamage;
                 knockVel += away * (p.knockback * 2.5f);
                 if (Stamina <= 0f)
                 {
@@ -365,7 +383,7 @@ namespace BoxingGame
             }
             else
             {
-                dmg = p.damage;
+                dmg = baseDamage;
                 knockVel += away * (p.knockback * 4f);
                 actionRoutine = StartCoroutine(StunRoutine(p.hitStun, "Hurt", FighterState.Hurt));
                 HitImpact?.Invoke(p.heavy ? 0.22f : 0.12f);

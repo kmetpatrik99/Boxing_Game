@@ -215,6 +215,11 @@ namespace BoxingGame
         bool NearEdge()
         {
             Vector3 p = me.transform.position;
+            if (me.ringRadius > 0.01f)
+            {
+                Vector3 off = new Vector3(p.x - me.ringCenter.x, 0f, p.z - me.ringCenter.z);
+                return off.magnitude > me.ringRadius - 0.5f;
+            }
             return Mathf.Abs(p.x - me.ringCenter.x) > me.ringHalfSize.x - 0.5f ||
                    Mathf.Abs(p.z - me.ringCenter.z) > me.ringHalfSize.y - 0.5f;
         }

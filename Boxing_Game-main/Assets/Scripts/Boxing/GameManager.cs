@@ -1,12 +1,41 @@
+using System;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using UnityEngine.Rendering;
 using UnityEngine.SceneManagement;
 
 namespace BoxingGame
 {
     public enum GamePhase { Menu, Countdown, Fight, RoundOver, MatchOver }
 
-    /// <summary>Match flow (menu, rounds, timer, KO / decision) and the HUD (drawn with OnGUI, no UI assets needed).</summary>
+    /// <summary>One selectable arena. The builder fills these in.</summary>
+    [Serializable]
+    public class MapDefinition
+    {
+        public string name = "Arena";
+        public string subtitle = "";
+        public GameObject root;                       // toggled on/off when the map is selected
+        public Vector3 center = Vector3.zero;
+        public Vector2 halfSize = new Vector2(2.4f, 2.4f);
+        public float radius = 0f;                     // > 0 = circular fighting area
+        public float groundY = 0f;
+
+        [Header("Environment")]
+        public bool applyEnvironment = true;
+        public bool skyboxClear = true;
+        public Material skybox;
+        public AmbientMode ambientMode = AmbientMode.Skybox;
+        public Color ambientColor = new Color(0.3f, 0.3f, 0.35f);
+        public bool fog = false;
+        public FogMode fogMode = FogMode.ExponentialSquared;
+        public Color fogColor = Color.black;
+        public float fogDensity = 0.02f;
+        public float fogStart = 10f;
+        public float fogEnd = 60f;
+        public Color cameraBackground = Color.black;
+    }
+
+    /// <summary>Match flow (menu, rounds, timer, KO / decision), difficulty presets, map switching and the HUD.</summary>
     public class GameManager : MonoBehaviour
     {
         [Header("References")]
@@ -14,7 +43,10 @@ namespace BoxingGame
         public Fighter opponent;
         public BoxerAI ai;
 
-        [Header("Ring (filled in by the scene builder)")]
+        [Header("Maps (filled in by the scene builder)")]
+        public MapDefinition[] maps;
+
+        [Header("Legacy single-ring settings (used only if 'maps' is empty)")]
         public Vector3 ringCenter = Vector3.zero;
         public Vector2 ringHalfSize = new Vector2(2.4f, 2.4f);
         public float groundY = 0f;
@@ -24,38 +56,78 @@ namespace BoxingGame
         public int maxRounds = 3;
         public int roundsToWin = 2;
         public float roundTime = 60f;
-        [Range(0, 2)] public int difficultyIndex = 1;   // 0 easy, 1 normal, 2 hard
+        [Range(0, 4)] public int difficultyIndex = 1;
+        public int mapIndex = 0;
 
         public GamePhase Phase { get; private set; } = GamePhase.Menu;
 
-        static readonly string[] DifficultyNames = { "EASY", "NORMAL", "HARD" };
-        static readonly float[] DifficultyValues = { 0.2f, 0.5f, 0.85f };
-
-        int round, playerWins, opponentWins;
-        float timer, phaseTimer, bannerUntil;
-        string banner = "", subBanner = "";
-        string matchResult = "";
-
-        GUIStyle label, big;
-        string popup = ""; float popupUntil; bool popupGood;
-
-        void OnDodged(Fighter f)
+        // ------------------------------------------------------------------ difficulty presets
+        struct Preset
         {
-            popupGood = f == player;
-            popup = popupGood ? "DODGE!" : "MISSED!";
-            popupUntil = Time.time + 0.7f;
+            public string label, opponent, perk;
+            public float ai, damage, health;
+            public Color color;
         }
 
+        static readonly Preset[] Presets =
+        {
+            new Preset { label = "EASY",       opponent = "Rookie Rico",       perk = "Slow reactions\nForgiving",        ai = 0.20f, damage = 1f, health = 1f,    color = new Color(0.35f, 0.85f, 0.50f) },
+            new Preset { label = "NORMAL",     opponent = "Iron Jack",         perk = "Balanced fighter",                  ai = 0.50f, damage = 1f, health = 1f,    color = new Color(0.35f, 0.70f, 1.00f) },
+            new Preset { label = "HARD",       opponent = "Savage Sam",        perk = "Sharp and relentless",              ai = 0.85f, damage = 1f, health = 1f,    color = new Color(1.00f, 0.65f, 0.20f) },
+            new Preset { label = "EXTREME",    opponent = "The Butcher",       perk = "2x damage",                         ai = 0.95f, damage = 2f, health = 1f,    color = new Color(1.00f, 0.30f, 0.30f) },
+            new Preset { label = "IMPOSSIBLE", opponent = "Prime Mike Tyson",  perk = "3x damage\n+50% health",            ai = 1.00f, damage = 3f, health = 1.5f,  color = new Color(0.75f, 0.40f, 1.00f) },
+        };
+
+        // remembered across "play again" scene reloads
+        static int lastDifficulty = -1, lastMap = -1;
+
+        // ------------------------------------------------------------------ state
+        int round, playerWins, opponentWins;
+        float timer, phaseTimer;
+        int lastCount = -1;
+        float baseOpponentHealth;
+        float ringRadius;
+        BoxingCamera boxCam;
+        Camera cam;
+
+        string bannerMain = "", bannerSub = "";
+        Color bannerColor = Color.white;
+        float bannerStart, bannerUntil;
+
+        string popup = ""; float popupUntil; bool popupGood;
+        float lagP = 1f, lagO = 1f;
+
+        // ------------------------------------------------------------------ lifecycle
         void Start()
         {
-            Setup(player);
-            Setup(opponent);
+            boxCam = FindFirstObjectByType<BoxingCamera>();
+            if (boxCam != null) cam = boxCam.GetComponent<Camera>();
+
+            baseOpponentHealth = opponent.maxHealth;
             player.opponent = opponent;
             opponent.opponent = player;
             player.Died += OnFighterDied;
             opponent.Died += OnFighterDied;
             player.Dodged += OnDodged;
             opponent.Dodged += OnDodged;
+
+            if (maps == null || maps.Length == 0)
+            {
+                maps = new[]
+                {
+                    new MapDefinition
+                    {
+                        name = "Arena", center = ringCenter, halfSize = ringHalfSize, groundY = groundY, applyEnvironment = false
+                    }
+                };
+            }
+
+            if (lastDifficulty >= 0) difficultyIndex = lastDifficulty;
+            if (lastMap >= 0) mapIndex = lastMap;
+            difficultyIndex = Mathf.Clamp(difficultyIndex, 0, Presets.Length - 1);
+            mapIndex = Mathf.Clamp(mapIndex, 0, maps.Length - 1);
+
+            ApplyMap(mapIndex);
             PlaceFighters();
             SetFightersActive(false);
             Phase = GamePhase.Menu;
@@ -67,10 +139,53 @@ namespace BoxingGame
             if (opponent != null) { opponent.Died -= OnFighterDied; opponent.Dodged -= OnDodged; }
         }
 
+        void OnDodged(Fighter f)
+        {
+            popupGood = f == player;
+            popup = popupGood ? "DODGE!" : "MISSED!";
+            popupUntil = Time.time + 0.7f;
+        }
+
+        // ------------------------------------------------------------------ maps
+        void ApplyMap(int index)
+        {
+            for (int i = 0; i < maps.Length; i++)
+                if (maps[i].root != null) maps[i].root.SetActive(i == index);
+
+            var m = maps[index];
+            ringCenter = m.center;
+            ringHalfSize = m.halfSize;
+            ringRadius = m.radius;
+            groundY = m.groundY;
+            Setup(player);
+            Setup(opponent);
+            if (boxCam != null) boxCam.groundY = m.groundY;
+
+            if (m.applyEnvironment)
+            {
+                RenderSettings.skybox = m.skybox;
+                RenderSettings.ambientMode = m.ambientMode;
+                if (m.ambientMode == AmbientMode.Flat) RenderSettings.ambientLight = m.ambientColor;
+                RenderSettings.fog = m.fog;
+                RenderSettings.fogMode = m.fogMode;
+                RenderSettings.fogColor = m.fogColor;
+                RenderSettings.fogDensity = m.fogDensity;
+                RenderSettings.fogStartDistance = m.fogStart;
+                RenderSettings.fogEndDistance = m.fogEnd;
+                if (cam != null)
+                {
+                    cam.clearFlags = m.skyboxClear ? CameraClearFlags.Skybox : CameraClearFlags.SolidColor;
+                    cam.backgroundColor = m.cameraBackground;
+                }
+                DynamicGI.UpdateEnvironment();
+            }
+        }
+
         void Setup(Fighter f)
         {
             f.ringCenter = new Vector3(ringCenter.x, groundY, ringCenter.z);
             f.ringHalfSize = ringHalfSize;
+            f.ringRadius = ringRadius;
         }
 
         void PlaceFighters()
@@ -81,6 +196,7 @@ namespace BoxingGame
             player.ResetFighter(pPos, Quaternion.LookRotation(Vector3.forward));
             opponent.ResetFighter(oPos, Quaternion.LookRotation(Vector3.back));
             if (ai != null) ai.ResetAI();
+            lagP = lagO = 1f;
         }
 
         void SetFightersActive(bool on)
@@ -95,9 +211,16 @@ namespace BoxingGame
         }
 
         // ------------------------------------------------------------------ flow
-
         void Update()
         {
+            if (player == null || opponent == null) return;
+
+            // trailing "damage" bars
+            float hpP = Mathf.Clamp01(player.Health / player.maxHealth);
+            float hpO = Mathf.Clamp01(opponent.Health / opponent.maxHealth);
+            lagP = hpP >= lagP ? hpP : Mathf.MoveTowards(lagP, hpP, 0.35f * Time.deltaTime);
+            lagO = hpO >= lagO ? hpO : Mathf.MoveTowards(lagO, hpO, 0.35f * Time.deltaTime);
+
             var kb = Keyboard.current;
             var pad = Gamepad.current;
             bool confirm = (kb != null && (kb.enterKey.wasPressedThisFrame || kb.numpadEnterKey.wasPressedThisFrame))
@@ -106,24 +229,21 @@ namespace BoxingGame
             switch (Phase)
             {
                 case GamePhase.Menu:
-                    if (kb != null)
-                    {
-                        if (kb.digit1Key.wasPressedThisFrame) difficultyIndex = 0;
-                        if (kb.digit2Key.wasPressedThisFrame) difficultyIndex = 1;
-                        if (kb.digit3Key.wasPressedThisFrame) difficultyIndex = 2;
-                    }
-                    if (pad != null)
-                    {
-                        if (pad.dpad.left.wasPressedThisFrame) difficultyIndex = Mathf.Max(0, difficultyIndex - 1);
-                        if (pad.dpad.right.wasPressedThisFrame) difficultyIndex = Mathf.Min(2, difficultyIndex + 1);
-                    }
+                    HandleMenuInput(kb, pad);
                     if (confirm || (kb != null && kb.spaceKey.wasPressedThisFrame)) StartMatch();
                     break;
 
                 case GamePhase.Countdown:
                     phaseTimer -= Time.deltaTime;
-                    int n = Mathf.CeilToInt(phaseTimer);
-                    if (phaseTimer > 0f) { banner = n.ToString(); subBanner = ""; bannerUntil = Time.time + 0.2f; }
+                    if (phaseTimer > 0f)
+                    {
+                        int n = Mathf.CeilToInt(phaseTimer);
+                        if (n != lastCount)
+                        {
+                            lastCount = n;
+                            SetBanner(n.ToString(), "ROUND " + round, 1f, Color.white);
+                        }
+                    }
                     else BeginFight();
                     break;
 
@@ -148,9 +268,54 @@ namespace BoxingGame
             }
         }
 
+        void HandleMenuInput(Keyboard kb, Gamepad pad)
+        {
+            int d = difficultyIndex;
+            int m = mapIndex;
+
+            if (kb != null)
+            {
+                if (kb.digit1Key.wasPressedThisFrame) d = 0;
+                if (kb.digit2Key.wasPressedThisFrame) d = 1;
+                if (kb.digit3Key.wasPressedThisFrame) d = 2;
+                if (kb.digit4Key.wasPressedThisFrame) d = 3;
+                if (kb.digit5Key.wasPressedThisFrame) d = 4;
+                if (kb.leftArrowKey.wasPressedThisFrame || kb.aKey.wasPressedThisFrame) d--;
+                if (kb.rightArrowKey.wasPressedThisFrame || kb.dKey.wasPressedThisFrame) d++;
+                if (kb.upArrowKey.wasPressedThisFrame || kb.wKey.wasPressedThisFrame) m--;
+                if (kb.downArrowKey.wasPressedThisFrame || kb.sKey.wasPressedThisFrame || kb.mKey.wasPressedThisFrame) m++;
+            }
+            if (pad != null)
+            {
+                if (pad.dpad.left.wasPressedThisFrame) d--;
+                if (pad.dpad.right.wasPressedThisFrame) d++;
+                if (pad.dpad.up.wasPressedThisFrame) m--;
+                if (pad.dpad.down.wasPressedThisFrame) m++;
+            }
+
+            difficultyIndex = Mathf.Clamp(d, 0, Presets.Length - 1);
+            int count = maps.Length;
+            m = ((m % count) + count) % count;
+            if (m != mapIndex)
+            {
+                mapIndex = m;
+                ApplyMap(mapIndex);
+                PlaceFighters();
+            }
+        }
+
         void StartMatch()
         {
-            if (ai != null) ai.SetDifficulty(DifficultyValues[difficultyIndex]);
+            lastDifficulty = difficultyIndex;
+            lastMap = mapIndex;
+
+            var p = Presets[difficultyIndex];
+            if (ai != null) ai.SetDifficulty(p.ai);
+            opponent.damageMultiplier = p.damage;
+            opponent.maxHealth = baseOpponentHealth * p.health;
+            opponent.displayName = p.opponent;
+            player.displayName = "YOU";
+
             round = 0;
             playerWins = opponentWins = 0;
             StartRound();
@@ -162,9 +327,9 @@ namespace BoxingGame
             PlaceFighters();
             SetFightersActive(false);
             timer = roundTime;
-            phaseTimer = 3.5f;
+            phaseTimer = 3f;
+            lastCount = -1;
             Phase = GamePhase.Countdown;
-            subBanner = "ROUND " + round;
         }
 
         void BeginFight()
@@ -172,9 +337,7 @@ namespace BoxingGame
             Phase = GamePhase.Fight;
             SetFightersActive(true);
             if (ai != null) ai.ResetAI();
-            banner = "FIGHT!";
-            subBanner = "";
-            bannerUntil = Time.time + 1.0f;
+            SetBanner("FIGHT!", "", 1.0f, new Color(1f, 0.82f, 0.25f));
         }
 
         void OnFighterDied(Fighter dead)
@@ -197,9 +360,10 @@ namespace BoxingGame
             if (winner == player) playerWins++;
             else if (winner == opponent) opponentWins++;
 
-            banner = text;
-            subBanner = winner == null ? "No point awarded" : (winner == player ? "You win the round" : "Opponent wins the round");
-            bannerUntil = Time.time + 3.5f;
+            string sub = winner == null ? "No point awarded"
+                       : (winner == player ? "You win the round" : opponent.displayName + " wins the round");
+            Color c = winner == player ? new Color(0.45f, 1f, 0.6f) : (winner == opponent ? new Color(1f, 0.4f, 0.4f) : Color.white);
+            SetBanner(text, sub, 3.5f, c);
             phaseTimer = 3.5f;
             Phase = GamePhase.RoundOver;
         }
@@ -207,114 +371,294 @@ namespace BoxingGame
         void FinishMatch()
         {
             Phase = GamePhase.MatchOver;
-            if (playerWins > opponentWins) matchResult = "YOU WIN!";
-            else if (opponentWins > playerWins) matchResult = "YOU LOSE";
-            else matchResult = "DRAW";
-            banner = matchResult;
-            subBanner = "Press Enter / R to play again";
-            bannerUntil = float.MaxValue;
         }
 
-        // ------------------------------------------------------------------ HUD
+        void SetBanner(string main, string sub, float duration, Color color)
+        {
+            bannerMain = main;
+            bannerSub = sub;
+            bannerColor = color;
+            bannerStart = Time.time;
+            bannerUntil = Time.time + duration;
+        }
+
+        // ================================================================== UI (IMGUI, drawn with rounded rects)
+
+        static readonly Color PanelBg = new Color(0.04f, 0.05f, 0.08f, 0.74f);
+        static readonly Color Gold = new Color(1f, 0.82f, 0.25f);
+        static readonly Color Muted = new Color(1f, 1f, 1f, 0.55f);
+
+        GUIStyle tx;
+        Font uiFont;
+
+        void EnsureStyle()
+        {
+            if (tx != null) return;
+            try { uiFont = Font.CreateDynamicFontFromOSFont(new[] { "Segoe UI", "Helvetica Neue", "Roboto", "Arial" }, 32); }
+            catch (Exception) { uiFont = null; }
+            tx = new GUIStyle(GUI.skin.label) { wordWrap = false, clipping = TextClipping.Overflow };
+            if (uiFont != null) tx.font = uiFont;
+        }
 
         void OnGUI()
         {
             if (player == null || opponent == null) return;
-            if (label == null)
-            {
-                label = new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleCenter };
-                big = new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleCenter };
-            }
+            if (Event.current.type != EventType.Repaint) return;
+            EnsureStyle();
 
-            float s = Screen.height / 720f;
             float W = Screen.width, H = Screen.height;
+            float s = Mathf.Min(H / 720f, W / 1100f);
 
             if (Phase == GamePhase.Menu) { DrawMenu(W, H, s); return; }
 
-            // health + stamina bars
-            float barW = 400f * s, barH = 26f * s, pad = 30f * s, top = 28f * s;
-            DrawFighterBar(new Rect(pad, top, barW, barH), player, false, s, new Color(0.2f, 0.8f, 0.3f));
-            DrawFighterBar(new Rect(W - pad - barW, top, barW, barH), opponent, true, s, new Color(0.9f, 0.25f, 0.2f));
-
-            // timer + round
-            Text(new Rect(W / 2f - 80f * s, top - 8f * s, 160f * s, 40f * s), Mathf.CeilToInt(timer).ToString(), 34f * s, Color.white);
-            Text(new Rect(W / 2f - 120f * s, top + 30f * s, 240f * s, 24f * s),
-                 "ROUND " + Mathf.Max(1, round) + " / " + maxRounds + "    " + Pips(playerWins) + " - " + Pips(opponentWins), 16f * s, new Color(1f, 1f, 1f, 0.85f));
-
-            // banner
-            if (Time.time < bannerUntil || Phase == GamePhase.Countdown)
-            {
-                if (!string.IsNullOrEmpty(subBanner)) Text(new Rect(0, H * 0.28f, W, 40f * s), subBanner, 26f * s, new Color(1f, 0.9f, 0.4f));
-                if (!string.IsNullOrEmpty(banner)) Text(new Rect(0, H * 0.34f, W, 120f * s), banner, 90f * s, Color.white);
-            }
-
-            if (Time.time < popupUntil)
-                Text(new Rect(0, H * 0.62f, W, 50f * s), popup, 36f * s, popupGood ? new Color(0.5f, 1f, 0.6f) : new Color(1f, 0.6f, 0.5f));
-
-            // controls hint
-            Text(new Rect(0, H - 34f * s, W, 26f * s),
-                 "WASD move   LMB jab   RMB cross   E uppercut   Ctrl/Space dodge   Shift guard", 15f * s, new Color(1f, 1f, 1f, 0.7f));
+            DrawHud(W, H, s);
+            DrawBanner(W, H, s);
+            DrawPopup(W, H, s);
+            if (Phase == GamePhase.MatchOver) DrawMatchOver(W, H, s);
+            else DrawControlChips(W, H - 52f * s, s, true);
         }
 
+        // ---- primitives
+        void RR(Rect r, Color c, float radius)
+        {
+            if (r.width < 1f || r.height < 1f) return;
+            radius = Mathf.Min(radius, Mathf.Min(r.width, r.height) * 0.5f);
+            GUI.DrawTexture(r, Texture2D.whiteTexture, ScaleMode.StretchToFill, true, 0f, c, 0f, radius);
+        }
+
+        void Fill(Rect r, Color c) { RR(r, c, 0f); }
+
+        void Label(Rect r, string text, float size, Color c, TextAnchor anchor = TextAnchor.MiddleCenter, bool bold = true, bool shadow = true)
+        {
+            tx.fontSize = Mathf.Max(8, Mathf.RoundToInt(size));
+            tx.fontStyle = bold ? FontStyle.Bold : FontStyle.Normal;
+            tx.alignment = anchor;
+            if (shadow)
+            {
+                tx.normal.textColor = new Color(0f, 0f, 0f, c.a * 0.55f);
+                GUI.Label(new Rect(r.x + 1.5f, r.y + 1.5f, r.width, r.height), text, tx);
+            }
+            tx.normal.textColor = c;
+            GUI.Label(r, text, tx);
+        }
+
+        float TextW(string text, float size, bool bold = true)
+        {
+            tx.fontSize = Mathf.Max(8, Mathf.RoundToInt(size));
+            tx.fontStyle = bold ? FontStyle.Bold : FontStyle.Normal;
+            return tx.CalcSize(new GUIContent(text)).x;
+        }
+
+        void BarFill(Rect track, float t, Color c, bool right, float radius)
+        {
+            float w = track.width * Mathf.Clamp01(t);
+            if (w < 1f) return;
+            Rect r = right ? new Rect(track.xMax - w, track.y, w, track.height) : new Rect(track.x, track.y, w, track.height);
+            RR(r, c, radius);
+        }
+
+        static Color HpColor(float t)
+        {
+            Color green = new Color(0.30f, 0.90f, 0.50f), yellow = new Color(1f, 0.85f, 0.25f), red = new Color(1f, 0.30f, 0.30f);
+            return t > 0.5f ? Color.Lerp(yellow, green, (t - 0.5f) * 2f) : Color.Lerp(red, yellow, t * 2f);
+        }
+
+        void Dot(float cx, float cy, float r, Color c) { RR(new Rect(cx - r, cy - r, r * 2f, r * 2f), c, r); }
+
+        // ---- HUD
+        void DrawHud(float W, float H, float s)
+        {
+            float m = 24f * s;
+            float pw = Mathf.Min(W * 0.34f, 430f * s);
+            float ph = 72f * s;
+
+            DrawFighterPanel(new Rect(m, m, pw, ph), player, lagP, false, "YOU", null, default(Color), s);
+            var pr = Presets[difficultyIndex];
+            DrawFighterPanel(new Rect(W - m - pw, m, pw, ph), opponent, lagO, true, opponent.displayName.ToUpperInvariant(), pr.label, pr.color, s);
+
+            // timer
+            Rect tr = new Rect(W * 0.5f - 55f * s, m, 110f * s, 44f * s);
+            RR(tr, PanelBg, 14f * s);
+            int secs = Mathf.CeilToInt(Mathf.Max(0f, timer));
+            Color tc = Color.white;
+            if (Phase == GamePhase.Fight && secs <= 10) tc = Color.Lerp(Color.white, new Color(1f, 0.35f, 0.35f), 0.5f + 0.5f * Mathf.Sin(Time.time * 7f));
+            Label(tr, secs.ToString(), 28f * s, tc);
+
+            // round pill + win dots
+            Rect rp = new Rect(W * 0.5f - 95f * s, tr.yMax + 6f * s, 190f * s, 26f * s);
+            RR(rp, PanelBg, 13f * s);
+            Label(rp, "ROUND " + Mathf.Max(1, round) + " / " + maxRounds, 12f * s, Muted, TextAnchor.MiddleCenter, true, false);
+            for (int i = 0; i < roundsToWin; i++)
+            {
+                float cy = rp.y + rp.height * 0.5f;
+                Dot(rp.x + 16f * s + i * 16f * s, cy, 5f * s, playerWins > i ? new Color(0.45f, 1f, 0.6f) : new Color(1f, 1f, 1f, 0.18f));
+                Dot(rp.xMax - 16f * s - i * 16f * s, cy, 5f * s, opponentWins > i ? new Color(1f, 0.4f, 0.4f) : new Color(1f, 1f, 1f, 0.18f));
+            }
+        }
+
+        void DrawFighterPanel(Rect r, Fighter f, float lag, bool right, string name, string chipText, Color chipColor, float s)
+        {
+            RR(r, PanelBg, 14f * s);
+            float pad = 14f * s;
+
+            Rect nameR = new Rect(r.x + pad, r.y + 8f * s, r.width - pad * 2f, 24f * s);
+            Label(nameR, name, 17f * s, Color.white, right ? TextAnchor.MiddleRight : TextAnchor.MiddleLeft);
+
+            if (!string.IsNullOrEmpty(chipText))
+            {
+                float cw = TextW(chipText, 11f * s) + 18f * s;
+                Rect cr = right ? new Rect(r.x + pad, r.y + 11f * s, cw, 18f * s) : new Rect(r.xMax - pad - cw, r.y + 11f * s, cw, 18f * s);
+                RR(cr, new Color(chipColor.r, chipColor.g, chipColor.b, 0.28f), 9f * s);
+                Label(cr, chipText, 11f * s, chipColor, TextAnchor.MiddleCenter, true, false);
+            }
+
+            Rect bar = new Rect(r.x + pad, r.y + 38f * s, r.width - pad * 2f, 16f * s);
+            float hp = Mathf.Clamp01(f.Health / f.maxHealth);
+            RR(bar, new Color(1f, 1f, 1f, 0.10f), 8f * s);
+            BarFill(bar, lag, new Color(1f, 1f, 1f, 0.38f), right, 8f * s);
+            BarFill(bar, hp, HpColor(hp), right, 8f * s);
+
+            Rect sb = new Rect(bar.x, bar.yMax + 7f * s, bar.width, 5f * s);
+            RR(sb, new Color(1f, 1f, 1f, 0.08f), 2.5f * s);
+            BarFill(sb, f.Stamina / f.maxStamina, new Color(0.35f, 0.80f, 1f), right, 2.5f * s);
+        }
+
+        void DrawBanner(float W, float H, float s)
+        {
+            if (Phase == GamePhase.MatchOver || Time.time >= bannerUntil) return;
+            float age = Time.time - bannerStart;
+            float left = bannerUntil - Time.time;
+            float a = Mathf.Clamp01(age / 0.12f) * Mathf.Clamp01(left / 0.35f);
+            float pop = 1f + 0.35f * Mathf.Pow(1f - Mathf.Clamp01(age / 0.3f), 2f);
+
+            Fill(new Rect(0f, H * 0.29f, W, 170f * s), new Color(0f, 0f, 0f, 0.38f * a));
+            if (!string.IsNullOrEmpty(bannerSub))
+                Label(new Rect(0f, H * 0.29f + 14f * s, W, 30f * s), bannerSub.ToUpperInvariant(), 18f * s, new Color(1f, 1f, 1f, 0.8f * a));
+            Color c = bannerColor; c.a = a;
+            Label(new Rect(0f, H * 0.29f + 36f * s, W, 130f * s), bannerMain, 96f * s * pop, c);
+        }
+
+        void DrawPopup(float W, float H, float s)
+        {
+            if (Time.time >= popupUntil) return;
+            float a = Mathf.Clamp01((popupUntil - Time.time) / 0.3f);
+            Color c = popupGood ? new Color(0.5f, 1f, 0.65f) : new Color(1f, 0.6f, 0.5f);
+            c.a = a;
+            Label(new Rect(0f, H * 0.62f - (1f - a) * 10f * s, W, 50f * s), popup, 34f * s, c);
+        }
+
+        void DrawControlChips(float W, float y, float s, bool background)
+        {
+            string[,] items =
+            {
+                { "WASD", "Move" }, { "LMB", "Jab" }, { "RMB", "Cross" }, { "E", "Uppercut" }, { "CTRL", "Dodge" }, { "SHIFT", "Guard" }
+            };
+            float keyPad = 16f * s, gap = 20f * s, inner = 8f * s, fs = 12f * s;
+            int n = items.GetLength(0);
+            float total = 0f;
+            for (int i = 0; i < n; i++)
+            {
+                float kw = Mathf.Max(30f * s, TextW(items[i, 0], fs) + keyPad);
+                total += kw + inner + TextW(items[i, 1], fs, false) + (i < n - 1 ? gap : 0f);
+            }
+
+            float x = (W - total) * 0.5f;
+            float h = 24f * s;
+            if (background) RR(new Rect(x - 18f * s, y - 7f * s, total + 36f * s, h + 14f * s), new Color(0.04f, 0.05f, 0.08f, 0.6f), (h + 14f * s) * 0.5f);
+
+            for (int i = 0; i < n; i++)
+            {
+                float kw = Mathf.Max(30f * s, TextW(items[i, 0], fs) + keyPad);
+                Rect kr = new Rect(x, y, kw, h);
+                RR(kr, new Color(1f, 1f, 1f, 0.16f), 7f * s);
+                Label(kr, items[i, 0], fs, Color.white, TextAnchor.MiddleCenter, true, false);
+                x += kw + inner;
+                float lw = TextW(items[i, 1], fs, false);
+                Label(new Rect(x, y, lw + 4f * s, h), items[i, 1], fs, Muted, TextAnchor.MiddleLeft, false, false);
+                x += lw + gap;
+            }
+        }
+
+        // ---- menu
         void DrawMenu(float W, float H, float s)
         {
-            Fill(new Rect(0, 0, W, H), new Color(0f, 0f, 0f, 0.55f));
-            Text(new Rect(0, H * 0.14f, W, 120f * s), "BOXING", 100f * s, new Color(1f, 0.85f, 0.2f));
-            Text(new Rect(0, H * 0.34f, W, 40f * s), "Select difficulty (1 / 2 / 3)", 24f * s, Color.white);
+            Fill(new Rect(0f, 0f, W, H), new Color(0.02f, 0.03f, 0.06f, 0.84f));
 
-            for (int i = 0; i < 3; i++)
+            Label(new Rect(0f, 24f * s, W, 110f * s), "BOXING", 96f * s, Color.white);
+            RR(new Rect(W * 0.5f - 36f * s, 134f * s, 72f * s, 4f * s), Gold, 2f * s);
+
+            // difficulty
+            Label(new Rect(0f, 156f * s, W, 22f * s), "DIFFICULTY", 14f * s, Muted);
+            Label(new Rect(0f, 176f * s, W, 20f * s), "LEFT / RIGHT or 1-5", 11f * s, new Color(1f, 1f, 1f, 0.35f), TextAnchor.MiddleCenter, false, false);
+
+            float cw = 188f * s, ch = 168f * s, gap = 14f * s;
+            float total = Presets.Length * cw + (Presets.Length - 1) * gap;
+            float x0 = (W - total) * 0.5f;
+            float y0 = 212f * s;
+
+            for (int i = 0; i < Presets.Length; i++)
             {
+                var p = Presets[i];
                 bool sel = i == difficultyIndex;
-                Rect r = new Rect(W / 2f - 270f * s + i * 190f * s, H * 0.42f, 170f * s, 48f * s);
-                Fill(r, sel ? new Color(0.95f, 0.75f, 0.1f, 0.95f) : new Color(1f, 1f, 1f, 0.15f));
-                Text(r, (i + 1) + "  " + DifficultyNames[i], 22f * s, sel ? Color.black : Color.white);
+                Rect cr = new Rect(x0 + i * (cw + gap), y0 - (sel ? 8f * s : 0f), cw, ch);
+
+                if (sel) RR(new Rect(cr.x - 3f * s, cr.y - 3f * s, cr.width + 6f * s, cr.height + 6f * s), p.color, 17f * s);
+                RR(cr, sel ? new Color(0.09f, 0.10f, 0.15f, 0.98f) : new Color(0.07f, 0.08f, 0.11f, 0.88f), 14f * s);
+
+                Label(new Rect(cr.x + 14f * s, cr.y + 10f * s, 30f * s, 20f * s), (i + 1).ToString(), 13f * s, Muted, TextAnchor.MiddleLeft, true, false);
+                RR(new Rect(cr.x + 16f * s, cr.y + 38f * s, 34f * s, 4f * s), p.color, 2f * s);
+                Label(new Rect(cr.x, cr.y + 46f * s, cr.width, 32f * s), p.label, 24f * s, p.color);
+                Label(new Rect(cr.x + 4f * s, cr.y + 84f * s, cr.width - 8f * s, 24f * s), p.opponent, 15f * s, Color.white);
+                Label(new Rect(cr.x + 6f * s, cr.y + 112f * s, cr.width - 12f * s, 44f * s), p.perk, 12f * s, new Color(1f, 1f, 1f, 0.62f), TextAnchor.MiddleCenter, false, false);
             }
 
-            Text(new Rect(0, H * 0.58f, W, 40f * s), "Press ENTER or SPACE to start", 30f * s, Color.white);
-            Text(new Rect(0, H * 0.70f, W, 120f * s),
-                 "WASD  move toward / away / circle\nLeft click or J  jab    Right click or K  cross    E or L  uppercut\nCtrl or Space  dodge (hold A/D/S for direction)    Hold Shift  guard\nGamepad: stick move, X jab, B cross, Y uppercut, A dodge, LT guard, Start",
-                 18f * s, new Color(1f, 1f, 1f, 0.85f));
+            // map
+            float my = y0 + ch + 34f * s;
+            Label(new Rect(0f, my, W, 22f * s), "ARENA", 14f * s, Muted);
+            Label(new Rect(0f, my + 20f * s, W, 20f * s), "UP / DOWN or M", 11f * s, new Color(1f, 1f, 1f, 0.35f), TextAnchor.MiddleCenter, false, false);
+
+            float mw = 300f * s, mh = 64f * s, mgap = 14f * s;
+            float mtotal = maps.Length * mw + (maps.Length - 1) * mgap;
+            float mx0 = (W - mtotal) * 0.5f;
+            float my0 = my + 48f * s;
+            for (int i = 0; i < maps.Length; i++)
+            {
+                bool sel = i == mapIndex;
+                Rect mr = new Rect(mx0 + i * (mw + mgap), my0, mw, mh);
+                if (sel) RR(new Rect(mr.x - 3f * s, mr.y - 3f * s, mr.width + 6f * s, mr.height + 6f * s), Gold, 15f * s);
+                RR(mr, sel ? new Color(0.09f, 0.10f, 0.15f, 0.98f) : new Color(0.07f, 0.08f, 0.11f, 0.88f), 12f * s);
+                Label(new Rect(mr.x, mr.y + 10f * s, mr.width, 26f * s), maps[i].name, 19f * s, sel ? Color.white : new Color(1f, 1f, 1f, 0.7f));
+                Label(new Rect(mr.x, mr.y + 36f * s, mr.width, 20f * s), maps[i].subtitle, 12f * s, Muted, TextAnchor.MiddleCenter, false, false);
+            }
+
+            // start prompt
+            float pulse = 0.6f + 0.4f * Mathf.Sin(Time.unscaledTime * 3f);
+            Label(new Rect(0f, my0 + mh + 28f * s, W, 36f * s), "PRESS ENTER TO FIGHT", 24f * s, new Color(1f, 1f, 1f, pulse));
+
+            DrawControlChips(W, H - 48f * s, s, false);
         }
 
-        void DrawFighterBar(Rect r, Fighter f, bool rightAligned, float s, Color hpColor)
+        // ---- end of match
+        void DrawMatchOver(float W, float H, float s)
         {
-            Fill(new Rect(r.x - 3f * s, r.y - 3f * s, r.width + 6f * s, r.height + 6f * s), new Color(0f, 0f, 0f, 0.7f));
-            float hp = Mathf.Clamp01(f.Health / f.maxHealth);
-            Rect hpRect = new Rect(r.x, r.y, r.width * hp, r.height);
-            if (rightAligned) hpRect.x = r.xMax - hpRect.width;
-            Fill(hpRect, hpColor);
+            Fill(new Rect(0f, 0f, W, H), new Color(0f, 0f, 0f, 0.6f));
 
-            float st = Mathf.Clamp01(f.Stamina / f.maxStamina);
-            Rect sr = new Rect(r.x, r.yMax + 6f * s, r.width * st, 9f * s);
-            if (rightAligned) sr.x = r.xMax - sr.width;
-            Fill(new Rect(r.x, r.yMax + 6f * s, r.width, 9f * s), new Color(0f, 0f, 0f, 0.6f));
-            Fill(sr, new Color(0.95f, 0.8f, 0.2f));
+            bool win = playerWins > opponentWins, lose = opponentWins > playerWins;
+            string title = win ? "YOU WIN" : (lose ? "YOU LOSE" : "DRAW");
+            Color tc = win ? Gold : (lose ? new Color(1f, 0.4f, 0.4f) : Color.white);
+            string sub = win ? "Defeated " + opponent.displayName : (lose ? "Beaten by " + opponent.displayName : "Nobody takes the belt");
+            if (win && difficultyIndex == Presets.Length - 1) sub = "You beat the impossible.";
 
-            label.alignment = rightAligned ? TextAnchor.MiddleRight : TextAnchor.MiddleLeft;
-            label.fontSize = Mathf.RoundToInt(16f * s);
-            label.normal.textColor = Color.white;
-            GUI.Label(new Rect(r.x, r.yMax + 14f * s, r.width, 22f * s), f.displayName, label);
-            label.alignment = TextAnchor.MiddleCenter;
-        }
+            Rect pr = new Rect(W * 0.5f - 270f * s, H * 0.5f - 140f * s, 540f * s, 280f * s);
+            RR(new Rect(pr.x - 3f * s, pr.y - 3f * s, pr.width + 6f * s, pr.height + 6f * s), new Color(tc.r, tc.g, tc.b, 0.9f), 22f * s);
+            RR(pr, new Color(0.06f, 0.07f, 0.10f, 0.98f), 20f * s);
 
-        static string Pips(int wins) { return wins.ToString(); }
+            Label(new Rect(pr.x, pr.y + 22f * s, pr.width, 90f * s), title, 72f * s, tc);
+            Label(new Rect(pr.x, pr.y + 112f * s, pr.width, 30f * s), sub, 19f * s, new Color(1f, 1f, 1f, 0.85f), TextAnchor.MiddleCenter, false);
+            Label(new Rect(pr.x, pr.y + 150f * s, pr.width, 44f * s), playerWins + "  -  " + opponentWins, 34f * s, Color.white);
 
-        void Fill(Rect r, Color c)
-        {
-            Color old = GUI.color;
-            GUI.color = c;
-            GUI.DrawTexture(r, Texture2D.whiteTexture);
-            GUI.color = old;
-        }
-
-        void Text(Rect r, string text, float size, Color c)
-        {
-            big.fontSize = Mathf.RoundToInt(size);
-            big.alignment = TextAnchor.MiddleCenter;
-            big.normal.textColor = new Color(0f, 0f, 0f, 0.8f);
-            GUI.Label(new Rect(r.x + 2f, r.y + 2f, r.width, r.height), text, big);
-            big.normal.textColor = c;
-            GUI.Label(r, text, big);
+            float pulse = 0.55f + 0.45f * Mathf.Sin(Time.unscaledTime * 3f);
+            Label(new Rect(pr.x, pr.y + 214f * s, pr.width, 30f * s), "PRESS ENTER OR R TO PLAY AGAIN", 16f * s, new Color(1f, 1f, 1f, pulse));
         }
     }
 }
