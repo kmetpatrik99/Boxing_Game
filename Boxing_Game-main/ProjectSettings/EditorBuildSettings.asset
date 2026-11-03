@@ -7,11 +7,7 @@ EditorBuildSettings:
   m_Scenes:
   - enabled: 1
     path: Assets/Scenes/BoxingGame.unity
-<<<<<<< Updated upstream
-    guid: 1ae916b7242495a40af96e46a0aead5c
-=======
-    guid: 2e3bf7126f3a8754ba15555dc180ee90
->>>>>>> Stashed changes
+    guid: 214a23a3618ea30459bf9adcd3832d70
   m_configObjects:
     com.unity.input.settings.actions: {fileID: -944628639613478452, guid: 052faaac586de48259a63d0c4782560b, type: 3}
   m_UseUCBPForAssetBundles: 0

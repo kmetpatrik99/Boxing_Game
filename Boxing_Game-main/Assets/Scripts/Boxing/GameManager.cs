@@ -403,11 +403,6 @@ namespace BoxingGame
         void OnGUI()
         {
             if (player == null || opponent == null) return;
-<<<<<<< Updated upstream
-            if (Event.current.type != EventType.Repaint) return;
-            EnsureStyle();
-
-=======
 
             // Handle menu clicks separately from drawing so mouse selection works
             // while the existing keyboard/gamepad controls remain available.
@@ -417,7 +412,6 @@ namespace BoxingGame
             if (Event.current.type != EventType.Repaint) return;
             EnsureStyle();
 
->>>>>>> Stashed changes
             float W = Screen.width, H = Screen.height;
             float s = Mathf.Min(H / 720f, W / 1100f);
 
@@ -445,14 +439,6 @@ namespace BoxingGame
             tx.fontSize = Mathf.Max(8, Mathf.RoundToInt(size));
             tx.fontStyle = bold ? FontStyle.Bold : FontStyle.Normal;
             tx.alignment = anchor;
-<<<<<<< Updated upstream
-            if (shadow)
-            {
-                tx.normal.textColor = new Color(0f, 0f, 0f, c.a * 0.55f);
-                GUI.Label(new Rect(r.x + 1.5f, r.y + 1.5f, r.width, r.height), text, tx);
-            }
-=======
->>>>>>> Stashed changes
             tx.normal.textColor = c;
             GUI.Label(r, text, tx);
         }
@@ -594,8 +580,6 @@ namespace BoxingGame
             }
         }
 
-<<<<<<< Updated upstream
-=======
         void HandleMenuMouse(float W, float H)
         {
             float s = Mathf.Min(H / 720f, W / 1100f);
@@ -639,7 +623,6 @@ namespace BoxingGame
             }
         }
 
->>>>>>> Stashed changes
         // ---- menu
         void DrawMenu(float W, float H, float s)
         {
