@@ -403,9 +403,21 @@ namespace BoxingGame
         void OnGUI()
         {
             if (player == null || opponent == null) return;
+<<<<<<< Updated upstream
             if (Event.current.type != EventType.Repaint) return;
             EnsureStyle();
 
+=======
+
+            // Handle menu clicks separately from drawing so mouse selection works
+            // while the existing keyboard/gamepad controls remain available.
+            if (Phase == GamePhase.Menu && Event.current.type == EventType.MouseDown && Event.current.button == 0)
+                HandleMenuMouse(Screen.width, Screen.height);
+
+            if (Event.current.type != EventType.Repaint) return;
+            EnsureStyle();
+
+>>>>>>> Stashed changes
             float W = Screen.width, H = Screen.height;
             float s = Mathf.Min(H / 720f, W / 1100f);
 
@@ -433,11 +445,14 @@ namespace BoxingGame
             tx.fontSize = Mathf.Max(8, Mathf.RoundToInt(size));
             tx.fontStyle = bold ? FontStyle.Bold : FontStyle.Normal;
             tx.alignment = anchor;
+<<<<<<< Updated upstream
             if (shadow)
             {
                 tx.normal.textColor = new Color(0f, 0f, 0f, c.a * 0.55f);
                 GUI.Label(new Rect(r.x + 1.5f, r.y + 1.5f, r.width, r.height), text, tx);
             }
+=======
+>>>>>>> Stashed changes
             tx.normal.textColor = c;
             GUI.Label(r, text, tx);
         }
@@ -579,6 +594,52 @@ namespace BoxingGame
             }
         }
 
+<<<<<<< Updated upstream
+=======
+        void HandleMenuMouse(float W, float H)
+        {
+            float s = Mathf.Min(H / 720f, W / 1100f);
+
+            // Difficulty cards
+            float cw = 188f * s, ch = 168f * s, gap = 14f * s;
+            float total = Presets.Length * cw + (Presets.Length - 1) * gap;
+            float x0 = (W - total) * 0.5f;
+            float y0 = 212f * s;
+            for (int i = 0; i < Presets.Length; i++)
+            {
+                Rect card = new Rect(x0 + i * (cw + gap), y0 - (i == difficultyIndex ? 8f * s : 0f), cw, ch);
+                if (card.Contains(Event.current.mousePosition))
+                {
+                    difficultyIndex = i;
+                    Event.current.Use();
+                    return;
+                }
+            }
+
+            // Arena cards
+            float my = y0 + ch + 34f * s;
+            float mw = 300f * s, mh = 64f * s, mgap = 14f * s;
+            float mtotal = maps.Length * mw + (maps.Length - 1) * mgap;
+            float mx0 = (W - mtotal) * 0.5f;
+            float my0 = my + 48f * s;
+            for (int i = 0; i < maps.Length; i++)
+            {
+                Rect card = new Rect(mx0 + i * (mw + mgap), my0, mw, mh);
+                if (card.Contains(Event.current.mousePosition))
+                {
+                    if (mapIndex != i)
+                    {
+                        mapIndex = i;
+                        ApplyMap(mapIndex);
+                        PlaceFighters();
+                    }
+                    Event.current.Use();
+                    return;
+                }
+            }
+        }
+
+>>>>>>> Stashed changes
         // ---- menu
         void DrawMenu(float W, float H, float s)
         {
