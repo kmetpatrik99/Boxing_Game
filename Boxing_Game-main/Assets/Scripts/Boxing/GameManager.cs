@@ -394,10 +394,31 @@ namespace BoxingGame
         void EnsureStyle()
         {
             if (tx != null) return;
-            try { uiFont = Font.CreateDynamicFontFromOSFont(new[] { "Segoe UI", "Helvetica Neue", "Roboto", "Arial" }, 32); }
-            catch (Exception) { uiFont = null; }
+            uiFont = LoadUiFont();
             tx = new GUIStyle(GUI.skin.label) { wordWrap = false, clipping = TextClipping.Overflow };
             if (uiFont != null) tx.font = uiFont;
+        }
+
+        // WebGL has no access to OS fonts: CreateDynamicFontFromOSFont() succeeds but returns a font
+        // without glyphs, so every label renders invisible. Only use OS fonts on desktop platforms
+        // and fall back to the font bundled with Unity everywhere else.
+        static Font LoadUiFont()
+        {
+#if !UNITY_WEBGL
+            try
+            {
+                var os = Font.CreateDynamicFontFromOSFont(new[] { "Segoe UI", "Helvetica Neue", "Roboto", "Arial" }, 32);
+                if (os != null) return os;
+            }
+            catch (Exception) { }
+#endif
+            Font f = null;
+            try { f = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf"); } catch (Exception) { }
+            if (f == null)
+            {
+                try { f = Resources.GetBuiltinResource<Font>("Arial.ttf"); } catch (Exception) { }
+            }
+            return f; // null -> GUI.skin default font
         }
 
         void OnGUI()
@@ -425,11 +446,62 @@ namespace BoxingGame
         }
 
         // ---- primitives
+        // Rounded rectangles are drawn from a small procedural corner texture instead of the
+        // GUI.DrawTexture(borderRadius) overload, which relies on an internal shader that can be
+        // missing from WebGL builds (-> panels/bars disappear).
+        static Texture2D cornerTex;
+        const int CornerRes = 32;
+
+        static Texture2D GetCornerTex()
+        {
+            if (cornerTex != null) return cornerTex;
+            int n = CornerRes * 2;
+            var t = new Texture2D(n, n, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Bilinear, hideFlags = HideFlags.HideAndDontSave };
+            var px = new Color32[n * n];
+            float rad = CornerRes;
+            for (int y = 0; y < n; y++)
+                for (int x = 0; x < n; x++)
+                {
+                    float dx = x + 0.5f - rad, dy = y + 0.5f - rad;
+                    float a = Mathf.Clamp01(rad - Mathf.Sqrt(dx * dx + dy * dy) + 0.5f);
+                    px[y * n + x] = new Color32(255, 255, 255, (byte)Mathf.RoundToInt(a * 255f));
+                }
+            t.SetPixels32(px);
+            t.Apply(false, true);
+            cornerTex = t;
+            return t;
+        }
+
         void RR(Rect r, Color c, float radius)
         {
             if (r.width < 1f || r.height < 1f) return;
             radius = Mathf.Min(radius, Mathf.Min(r.width, r.height) * 0.5f);
-            GUI.DrawTexture(r, Texture2D.whiteTexture, ScaleMode.StretchToFill, true, 0f, c, 0f, radius);
+            Color prev = GUI.color;
+            GUI.color = new Color(prev.r * c.r, prev.g * c.g, prev.b * c.b, prev.a * c.a);
+            if (radius < 1f)
+            {
+                GUI.DrawTexture(r, Texture2D.whiteTexture, ScaleMode.StretchToFill, true);
+            }
+            else
+            {
+                var t = GetCornerTex();
+                float d = radius;
+                // UV quadrants of the circle texture: bottom-left origin
+                GUI.DrawTextureWithTexCoords(new Rect(r.x,         r.y,         d, d), t, new Rect(0f,   0.5f, 0.5f, 0.5f)); // top-left
+                GUI.DrawTextureWithTexCoords(new Rect(r.xMax - d,  r.y,         d, d), t, new Rect(0.5f, 0.5f, 0.5f, 0.5f)); // top-right
+                GUI.DrawTextureWithTexCoords(new Rect(r.x,         r.yMax - d,  d, d), t, new Rect(0f,   0f,   0.5f, 0.5f)); // bottom-left
+                GUI.DrawTextureWithTexCoords(new Rect(r.xMax - d,  r.yMax - d,  d, d), t, new Rect(0.5f, 0f,   0.5f, 0.5f)); // bottom-right
+                float midW = r.width - 2f * d;
+                if (midW > 0f)
+                {
+                    GUI.DrawTexture(new Rect(r.x + d, r.y, midW, d), Texture2D.whiteTexture, ScaleMode.StretchToFill, true);
+                    GUI.DrawTexture(new Rect(r.x + d, r.yMax - d, midW, d), Texture2D.whiteTexture, ScaleMode.StretchToFill, true);
+                }
+                float midH = r.height - 2f * d;
+                if (midH > 0f)
+                    GUI.DrawTexture(new Rect(r.x, r.y + d, r.width, midH), Texture2D.whiteTexture, ScaleMode.StretchToFill, true);
+            }
+            GUI.color = prev;
         }
 
         void Fill(Rect r, Color c) { RR(r, c, 0f); }
