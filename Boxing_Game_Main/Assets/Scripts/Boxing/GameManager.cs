@@ -405,16 +405,13 @@ namespace BoxingGame
         static readonly Color Muted = new Color(1f, 1f, 1f, 0.55f);
 
         GUIStyle tx;
-        Font uiFont;
 
-        // Funkcija EnsureStyle: glej razlago te skripte v NAVODILA_SLO.md.
+        // Use Unity's built-in GUI font. OS-installed fonts are not guaranteed
+        // to exist in WebGL browsers, so avoid requesting them at runtime.
         void EnsureStyle()
         {
             if (tx != null) return;
-            try { uiFont = Font.CreateDynamicFontFromOSFont(new[] { "Segoe UI", "Helvetica Neue", "Roboto", "Arial" }, 32); }
-            catch (Exception) { uiFont = null; }
             tx = new GUIStyle(GUI.skin.label) { wordWrap = false, clipping = TextClipping.Overflow };
-            if (uiFont != null) tx.font = uiFont;
         }
 
         // Funkcija OnGUI: glej razlago te skripte v NAVODILA_SLO.md.
